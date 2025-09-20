@@ -9,7 +9,7 @@ from docx import Document
 # --- OpenAI API Key (from Streamlit Secrets) ---
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-
+# --- Streamlit Page Config ---
 st.set_page_config(page_title="ETL to PySpark Validator", page_icon="⚡", layout="wide")
 
 # ----------- Custom Styling -----------
@@ -34,7 +34,7 @@ st.markdown(
 )
 
 st.title("⚡ ETL → PySpark Validator")
-st.write("Upload **Informatica or Datastage file** along with the **PySpark output file** and validate the conversion using AI.")
+st.write("Upload **Informatica or Datastage file** along with the **PySpark output file** and validate the conversion using AI. The app will also generate a corrected PySpark file if needed.")
 
 col1, col2 = st.columns(2)
 
@@ -59,6 +59,7 @@ with col2:
     pyspark_file = st.file_uploader("Upload PySpark File", type=["py"], key="pyspark")
 
 validation_report = None
+corrected_pyspark = None
 
 # ----------- Validation Section -----------
 if st.button("🚀 Validate Conversion"):
@@ -68,15 +69,16 @@ if st.button("🚀 Validate Conversion"):
         # Read contents
         input_content = ""
         if informatica_file:
-            input_content = informatica_file.read().decode("utf-8")
+            input_content = informatica_file.read().decode("utf-8", errors="ignore")
         elif datastage_file:
-            input_content = datastage_file.read().decode("utf-8")
+            input_content = datastage_file.read().decode("utf-8", errors="ignore")
 
-        pyspark_content = pyspark_file.read().decode("utf-8")
+        pyspark_content = pyspark_file.read().decode("utf-8", errors="ignore")
 
         # Call OpenAI API for validation
-        prompt = f"""
+        validation_prompt = f"""
         You are an ETL to PySpark conversion validator.
+        
         Input ETL file (from {'Informatica' if informatica_file else 'Datastage'}):
         {input_content}
 
@@ -89,94 +91,110 @@ if st.button("🚀 Validate Conversion"):
         - ⚠️ Potential issues
         - ❌ Missing logic
         - 💡 Suggested improvements
-
-        Use bullet points for each section.
         """
 
         try:
             response = client.chat.completions.create(
                 model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": validation_prompt}],
                 temperature=0
             )
 
-            validation_report = response.choices[0].message.content
+            validation_report = response.choices[0].message.content.strip()
             st.success("✅ Validation Completed")
             st.markdown("### 📝 Validation Report")
             st.write(validation_report)
+
+            # --- Step 2: Ask LLM to correct the PySpark file ---
+            correction_prompt = f"""
+            Based on the ETL input and PySpark output above, rewrite the PySpark code so that it
+            fully and correctly implements the ETL logic.
+            
+            IMPORTANT:
+            - Return only the corrected PySpark code.
+            - If the original file is already correct, return the same code unchanged.
+            """
+
+            correction_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are an expert PySpark converter."},
+                    {"role": "user", "content": f"ETL Input:\n{input_content}\n\nPySpark Output:\n{pyspark_content}\n\n{correction_prompt}"}
+                ],
+                temperature=0
+            )
+
+            corrected_pyspark = correction_response.choices[0].message.content.strip()
 
         except Exception as e:
             st.error(f"Error during validation: {e}")
     else:
         st.warning("⚠️ Please upload both an ETL file (Informatica/Datastage) and a PySpark file.")
 
+# ----------- Helper Functions for Reports -----------
+def parse_sections(text):
+    sections = {"Correct Parts": [], "Potential Issues": [], "Missing Logic": [], "Suggested Improvements": []}
+    current = None
+    for line in text.split("\n"):
+        line = line.strip()
+        if "Correct parts" in line or "Correct Parts" in line:
+            current = "Correct Parts"
+        elif "Potential issues" in line or "Potential Issues" in line:
+            current = "Potential Issues"
+        elif "Missing logic" in line or "Missing Logic" in line:
+            current = "Missing Logic"
+        elif "Suggested improvements" in line or "Suggested Improvements" in line:
+            current = "Suggested Improvements"
+        elif line.startswith("-") or line.startswith("•"):
+            if current:
+                sections[current].append(line.lstrip("-• ").strip())
+    return sections
+
+def create_pdf(sections):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    elements = []
+
+    elements.append(Paragraph("ETL → PySpark Validation Report", styles["Title"]))
+    elements.append(Spacer(1, 12))
+
+    for sec, items in sections.items():
+        elements.append(Paragraph(sec, styles["Heading2"]))
+        if items:
+            bullet_list = ListFlowable(
+                [ListItem(Paragraph(item, styles["Normal"])) for item in items],
+                bulletType="bullet",
+            )
+            elements.append(bullet_list)
+        else:
+            elements.append(Paragraph("No findings.", styles["Normal"]))
+        elements.append(Spacer(1, 12))
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+def create_docx(sections):
+    buffer = BytesIO()
+    doc = Document()
+    doc.add_heading("ETL → PySpark Validation Report", 0)
+
+    for sec, items in sections.items():
+        doc.add_heading(sec, level=1)
+        if items:
+            for item in items:
+                doc.add_paragraph(item, style="List Bullet")
+        else:
+            doc.add_paragraph("No findings.")
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
 # ----------- Download Section -----------
 if validation_report:
     col1, col2 = st.columns(2)
-
-    # --- Helper: Parse sections into dictionary ---
-    def parse_sections(text):
-        sections = {"Correct Parts": [], "Potential Issues": [], "Missing Logic": [], "Suggested Improvements": []}
-        current = None
-        for line in text.split("\n"):
-            line = line.strip()
-            if "Correct parts" in line:
-                current = "Correct Parts"
-            elif "Potential issues" in line:
-                current = "Potential Issues"
-            elif "Missing logic" in line:
-                current = "Missing Logic"
-            elif "Suggested improvements" in line:
-                current = "Suggested Improvements"
-            elif line.startswith("-") or line.startswith("•"):
-                if current:
-                    sections[current].append(line.lstrip("-• ").strip())
-        return sections
-
     sections = parse_sections(validation_report)
-
-    # --- Create PDF with formatting ---
-    def create_pdf(sections):
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        styles = getSampleStyleSheet()
-        elements = []
-
-        elements.append(Paragraph("ETL → PySpark Validation Report", styles["Title"]))
-        elements.append(Spacer(1, 12))
-
-        for sec, items in sections.items():
-            elements.append(Paragraph(sec, styles["Heading2"]))
-            if items:
-                bullet_list = ListFlowable(
-                    [ListItem(Paragraph(item, styles["Normal"])) for item in items],
-                    bulletType="bullet",
-                )
-                elements.append(bullet_list)
-            else:
-                elements.append(Paragraph("No findings.", styles["Normal"]))
-            elements.append(Spacer(1, 12))
-
-        doc.build(elements)
-        buffer.seek(0)
-        return buffer
-
-    # --- Create Word DOCX with formatting ---
-    def create_docx(sections):
-        buffer = BytesIO()
-        doc = Document()
-        doc.add_heading("ETL → PySpark Validation Report", 0)
-
-        for sec, items in sections.items():
-            doc.add_heading(sec, level=1)
-            if items:
-                for item in items:
-                    doc.add_paragraph(item, style="List Bullet")
-            else:
-                doc.add_paragraph("No findings.")
-        doc.save(buffer)
-        buffer.seek(0)
-        return buffer
 
     pdf_file = create_pdf(sections)
     docx_file = create_docx(sections)
@@ -195,3 +213,15 @@ if validation_report:
             file_name="Validation_Report.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+
+# ----------- Corrected PySpark Download -----------
+if corrected_pyspark:
+    st.markdown("### 🛠️ Corrected PySpark Code")
+    st.code(corrected_pyspark, language="python")
+
+    st.download_button(
+        label="⬇️ Download Corrected PySpark File",
+        data=corrected_pyspark.encode("utf-8"),
+        file_name="Corrected_PySpark.py",
+        mime="text/x-python"
+    )
