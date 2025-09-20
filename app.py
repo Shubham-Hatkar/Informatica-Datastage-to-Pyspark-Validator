@@ -1,11 +1,13 @@
 import streamlit as st
 from openai import OpenAI
-import os
 from io import BytesIO
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
 from docx import Document
+
+# --- OpenAI API Key (from Streamlit Secrets) ---
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
 st.set_page_config(page_title="ETL to PySpark Validator", page_icon="⚡", layout="wide")
