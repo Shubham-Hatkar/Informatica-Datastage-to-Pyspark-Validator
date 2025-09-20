@@ -7,9 +7,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
 from docx import Document
 
-# Initialize OpenAI client
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 st.set_page_config(page_title="ETL to PySpark Validator", page_icon="⚡", layout="wide")
 
